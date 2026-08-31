@@ -1,6 +1,6 @@
 {
   "name": "landlock-js",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Node.js bindings for Linux Landlock security features",
   "author": "Dominic Elm",
   "license": "MIT",
@@ -47,10 +47,10 @@
     "addon"
   ],
   "optionalDependencies": {
-    "@landlock/landlock-js-linux-arm64-gnu": "0.0.0",
-    "@landlock/landlock-js-linux-arm64-musl": "0.0.0",
-    "@landlock/landlock-js-linux-x64-gnu": "0.0.0",
-    "@landlock/landlock-js-linux-x64-musl": "0.0.0"
+    "@landlock/landlock-js-linux-arm64-gnu": "0.0.1",
+    "@landlock/landlock-js-linux-arm64-musl": "0.0.1",
+    "@landlock/landlock-js-linux-x64-gnu": "0.0.1",
+    "@landlock/landlock-js-linux-x64-musl": "0.0.1"
   },
   "pnpm": {
     "ignoredOptionalDependencies": [
