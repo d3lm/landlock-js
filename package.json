@@ -15,6 +15,10 @@
     "dist/index.mjs",
     "dist/index.mjs.map"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/d3lm/landlock-js.git"
+  },
   "napi": {
     "binaryName": "landlock-js",
     "packageName": "@landlock/landlock-js",
