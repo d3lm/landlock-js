@@ -1,4 +1,4 @@
-import { ABI, FsAccess, NetAccess, Scope } from './types';
+import { ABI, FsAccess, NetAccess, RestrictFlag, Scope } from './types';
 
 export const FS_ACCESS: Partial<Record<ABI, FsAccess[]>> = {
   1: [
@@ -19,6 +19,7 @@ export const FS_ACCESS: Partial<Record<ABI, FsAccess[]>> = {
   2: ['refer'],
   3: ['truncate'],
   5: ['ioctl_dev'],
+  9: ['resolve_unix'],
 };
 
 export const NET_ACCESS: Partial<Record<ABI, NetAccess[]>> = {
@@ -27,6 +28,11 @@ export const NET_ACCESS: Partial<Record<ABI, NetAccess[]>> = {
 
 export const SCOPES: Partial<Record<ABI, Scope[]>> = {
   6: ['signal', 'abstract_unix_socket'],
+};
+
+export const RESTRICT_FLAGS: Partial<Record<ABI, RestrictFlag[]>> = {
+  7: ['log_same_exec', 'log_new_exec', 'log_subdomains'],
+  8: ['all_threads'],
 };
 
 export function _featuresfromAbi<T>(abi: ABI, featureMap: Partial<Record<ABI, T>>): T {

@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as vitest from 'vitest';
-import { fsAccessFromAbi, getAbiVersion, isLandlockSupported, type FsAccess } from '../dist/index.mjs';
+import { LandlockRuleset, fsAccessFromAbi, getAbiVersion, isLandlockSupported, type FsAccess } from '../dist/index.mjs';
 
 const isSupported = isLandlockSupported();
 const abi = getAbiVersion();
@@ -24,10 +24,58 @@ test('remove_dir');
 test('refer');
 test('truncate');
 test('ioctl_dev');
+test('resolve_unix');
 
 // scenario tests cover cross-cutting behavior such as ruleset layering
 testScenario('layers');
 testScenario('unhandled_access');
+
+vitest.describe.skipIf(!isSupported)('rule validation', () => {
+  // mirrors the unknown access checks of the upstream `mini` net fixture for fs rights
+  vitest.test('rejects unknown access rights', () => {
+    const invalid = ['bogus'] as unknown as FsAccess[];
+
+    vitest.expect(() => new LandlockRuleset().handleFsAccess(invalid)).toThrow(/Unknown fs access/);
+
+    const ruleset = new LandlockRuleset();
+
+    ruleset.handleFsAccess(['read_file']);
+    ruleset.create();
+
+    vitest.expect(() => ruleset.addPathRule('/', invalid)).toThrow(/Unknown fs access/);
+  });
+
+  const hasResolveUnix = supportedAccess.includes('resolve_unix');
+
+  /**
+   * Building rulesets is safe in-process because only restrictSelf() changes
+   * the process, so the compatibility behavior of the ABI 9 right can be
+   * probed directly.
+   */
+  vitest.test.skipIf(hasResolveUnix)('handles resolve_unix gracefully below ABI 9', () => {
+    // best effort silently drops the right and still creates the ruleset
+    const dropped = new LandlockRuleset();
+
+    dropped.handleFsAccess(['resolve_unix']);
+    dropped.create();
+
+    // a hard requirement turns the missing kernel support into an error
+    const strict = new LandlockRuleset();
+
+    strict.setCompatibility('hard_requirement');
+
+    vitest.expect(() => strict.handleFsAccess(['resolve_unix'])).toThrow(/Failed to handle fs access/);
+  });
+
+  vitest.test.skipIf(!hasResolveUnix)('accepts resolve_unix rules on ABI 9 kernels', () => {
+    const ruleset = new LandlockRuleset();
+
+    ruleset.setCompatibility('hard_requirement');
+    ruleset.handleFsAccess(['resolve_unix']);
+    ruleset.create();
+    ruleset.addPathRule('/', ['resolve_unix']);
+  });
+});
 
 function runFixture(name: string) {
   const runner = path.resolve(import.meta.dirname, 'fixtures/fs.ts');

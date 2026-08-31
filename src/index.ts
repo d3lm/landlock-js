@@ -1,6 +1,6 @@
 import { familySync, MUSL } from 'detect-libc';
 import { createRequire } from 'node:module';
-import { _featuresfromAbi, FS_ACCESS, NET_ACCESS, SCOPES } from './features';
+import { _featuresfromAbi, FS_ACCESS, NET_ACCESS, RESTRICT_FLAGS, SCOPES } from './features';
 import {
   ABI,
   CompatibilityLevel,
@@ -10,6 +10,9 @@ import {
   NetPortRule,
   PathRule,
   RestrictionStatus,
+  RestrictSelfFlagsOptions,
+  RestrictSelfFlagsStatus,
+  RestrictSelfOptions,
   Scope,
   type NativeBinding,
 } from './types';
@@ -220,9 +223,14 @@ export class LandlockRuleset {
   }
 
   /**
-   * Apply the ruleset restrictions to the current process.
+   * Apply the ruleset restrictions to the current process. By default only
+   * the calling thread is restricted, denied accesses are logged for code
+   * running the same executable, and `PR_SET_NO_NEW_PRIVS` is set. All of
+   * this can be changed through the options, subject to the kernel supporting
+   * the matching restrict-self flag and to the compatibility level of the
+   * ruleset.
    */
-  restrictSelf(): RestrictionStatus {
+  restrictSelf(options?: RestrictSelfOptions): RestrictionStatus {
     if (!this.#created) {
       throw new Error('Ruleset must be created before restricting');
     }
@@ -231,7 +239,7 @@ export class LandlockRuleset {
       throw new Error('Process already restricted');
     }
 
-    const status = this.#native.restrictSelf();
+    const status = this.#native.restrictSelf(options);
 
     this.#restricted = true;
 
@@ -247,10 +255,41 @@ export function getAbiVersion(): ABI {
 }
 
 /**
+ * Returns the bitmask of Landlock errata fixed in the running kernel, where
+ * bit N-1 set means erratum N is fixed. Returns `0` when the kernel does not
+ * support the errata query or Landlock is unavailable. Most applications
+ * should not check errata, because disabling a feature over an unfixed
+ * erratum usually leaves the system less secure than Landlock's best-effort
+ * protection.
+ *
+ * @see https://docs.kernel.org/userspace-api/landlock.html#landlock-errata
+ */
+export function getErrata(): number {
+  return nativeBinding.getErrata();
+}
+
+/**
  * Checks if Landlock is supported on the current system.
  */
 export function isLandlockSupported(): boolean {
   return nativeBinding.isLandlockSupported();
+}
+
+/**
+ * Applies restrict-self flags to the current process without enforcing a
+ * ruleset, which maps to `landlock_restrict_self(2)` with a ruleset file
+ * descriptor of -1. The kernel accepts `log_subdomains: false` on this path,
+ * optionally combined with `all_threads: true` to propagate the logging
+ * configuration to every thread of the process. This is useful for runtimes
+ * that launch programs which create their own Landlock domains and would
+ * otherwise flood the audit log.
+ *
+ * When no effective flag remains, for example because the kernel predates
+ * ABI 7 and the default `'best_effort'` level dropped them, the syscall is
+ * skipped and the returned status reports the kernel defaults.
+ */
+export function applyRestrictSelfFlags(options?: RestrictSelfFlagsOptions): RestrictSelfFlagsStatus {
+  return nativeBinding.applyRestrictSelfFlags(options);
 }
 
 /**
@@ -272,4 +311,11 @@ export function netAccessFromAbi(abi: ABI) {
  */
 export function scopesFromAbi(abi: ABI) {
   return _featuresfromAbi(abi, SCOPES);
+}
+
+/**
+ * Returns the restrict-self flags supported by the given Landlock ABI version.
+ */
+export function restrictFlagsFromAbi(abi: ABI) {
+  return _featuresfromAbi(abi, RESTRICT_FLAGS);
 }

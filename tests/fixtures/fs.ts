@@ -7,11 +7,11 @@
  * tools/testing/selftests/landlock/fs_test.c as closely as pure Node.js APIs
  * allow. Covered upstream behavior includes the per-access-right checks
  * (read_file, write_file, execute, the make_* family, remove_*, read_dir,
- * truncate, refer and ioctl_dev), rules attached to single files, rename and
- * link operations being guarded by the make_* and remove_* rights, the
- * EACCES-over-EXDEV precedence for reparenting, truncate rights attaching to
- * file descriptors at open time, ruleset layering, and unhandled access rights
- * staying unrestricted.
+ * truncate, refer, ioctl_dev and resolve_unix), rules attached to single
+ * files, rename and link operations being guarded by the make_* and remove_*
+ * rights, the EACCES-over-EXDEV precedence for reparenting, truncate rights
+ * attaching to file descriptors at open time, ruleset layering, and unhandled
+ * access rights staying unrestricted.
  *
  * The following upstream scenarios need low level syscall access (a native
  * helper or FFI binding) and cannot be reproduced with pure Node.js APIs.
@@ -858,6 +858,72 @@ const testCases: Partial<Record<TestName, (dir: string) => void | Promise<void>>
     fs.closeSync(probeFd);
   },
 
+  /**
+   * Mirrors the pathname UNIX socket checks that upstream runs for the
+   * resolve_unix right (ABI 9). Connecting to a pathname socket that was
+   * created outside the Landlock domain is denied with EACCES unless a rule
+   * grants resolve_unix on the socket path, while sockets created within the
+   * same domain, abstract sockets and unhandled rulesets stay unrestricted.
+   * The sendmsg(2) variant with an explicit recipient address needs datagram
+   * UNIX sockets, which node:dgram does not support.
+   */
+  async resolve_unix(dir) {
+    const allowedDir = path.join(dir, 'allowed');
+    const deniedDir = path.join(dir, 'denied');
+    const allowedSock = path.join(allowedDir, 'allowed.sock');
+    const deniedSock = path.join(deniedDir, 'denied.sock');
+    const abstractAddress = `\0landlock-fs-resolve-${process.pid}`;
+
+    fs.mkdirSync(allowedDir);
+    fs.mkdirSync(deniedDir);
+
+    /**
+     * All three servers are created before any restriction, so they count as
+     * created outside the Landlock domains enforced below.
+     */
+    const allowedServer = net.createServer();
+    const deniedServer = net.createServer();
+    const abstractServer = net.createServer();
+
+    expect(await listenOnPath(allowedServer, allowedSock)).toBeUndefined();
+    expect(await listenOnPath(deniedServer, deniedSock)).toBeUndefined();
+    expect(await listenOnPath(abstractServer, abstractAddress)).toBeUndefined();
+
+    // a domain that does not handle resolve_unix leaves all connects unrestricted
+    enforce(['read_file'], []);
+
+    expect(await unixConnectCode(allowedSock)).toBeUndefined();
+    expect(await unixConnectCode(deniedSock)).toBeUndefined();
+
+    // the second layer handles resolve_unix and grants it below allowedDir only
+    enforce(['resolve_unix'], [{ path: allowedDir, access: ['resolve_unix'] }]);
+
+    // pathname resolution works below the directory covered by the rule
+    expect(await unixConnectCode(allowedSock)).toBeUndefined();
+
+    // the denial surfaces as EACCES like other fs rights, not as the EPERM of scopes
+    expect(await unixConnectCode(deniedSock)).toBe('EACCES');
+
+    /**
+     * A server created within the same domain stays reachable without any
+     * rule, matching the scope-like semantics of resolve_unix. Binding the
+     * socket file itself is unrestricted because make_sock is not handled.
+     */
+    const insideSock = path.join(deniedDir, 'inside.sock');
+    const insideServer = net.createServer();
+
+    expect(await listenOnPath(insideServer, insideSock)).toBeUndefined();
+    expect(await unixConnectCode(insideSock)).toBeUndefined();
+
+    // abstract sockets have no pathname to resolve, so they are unaffected
+    expect(await unixConnectCode(abstractAddress)).toBeUndefined();
+
+    await closeServer(insideServer);
+    await closeServer(allowedServer);
+    await closeServer(deniedServer);
+    await closeServer(abstractServer);
+  },
+
   layers(dir) {
     const nestedDir = path.join(dir, 'nested');
     const subDir = path.join(nestedDir, 'sub');
@@ -1069,6 +1135,25 @@ function closeServer(server: net.Server): Promise<void> {
   return new Promise((resolve) => {
     server.close(() => {
       resolve();
+    });
+  });
+}
+
+/**
+ * Attempts to open a UNIX stream connection to the given address and returns
+ * the error code of the failure, or undefined when connecting succeeded.
+ */
+function unixConnectCode(address: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection(address);
+
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(undefined);
+    });
+
+    socket.once('error', (error) => {
+      resolve(errnoCode(error));
     });
   });
 }

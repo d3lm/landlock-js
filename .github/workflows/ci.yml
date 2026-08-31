@@ -74,6 +74,10 @@ jobs:
             abi: 6
           - kernel: v6.15
             abi: 7
+          - kernel: v7.0
+            abi: 8
+          - kernel: v7.1
+            abi: 9
     steps:
       - uses: actions/checkout@v5
 
