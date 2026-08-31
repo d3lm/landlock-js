@@ -1,0 +1,155 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+env:
+  PNPM_VERSION: 10.33.0
+
+# Every napi target is built and tested natively on its own runner, mirroring
+# the CI jobs that already prove these exact environments work. The gnu
+# binaries come straight from the GitHub runners and the musl binaries are
+# built inside Alpine containers. Each job uploads its .node file so the
+# publish job can collect all four before releasing.
+jobs:
+  build-gnu:
+    name: Build linux-${{ matrix.arch }}-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      # sudo is required because the fs fixtures create device nodes with
+      # mknod. The runner kernels are at least 6.8, which provides Landlock
+      # ABI v4.
+      - run: sudo env "PATH=$PATH" LANDLOCK_TEST_MIN_ABI=4 pnpm test
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bindings-linux-${{ matrix.arch }}-gnu
+          path: dist/*.node
+          if-no-files-found: error
+
+  build-musl:
+    name: Build linux-${{ matrix.arch }}-musl
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    container:
+      image: node:24-alpine
+      # The default Docker seccomp profile blocks the landlock syscalls,
+      # so it is disabled to let the tests exercise the freshly built binary.
+      options: --security-opt seccomp=unconfined
+    env:
+      LANDLOCK_TEST_MIN_ABI: 4
+    steps:
+      - name: Install build dependencies
+        run: apk add --no-cache git build-base rust cargo
+
+      - uses: actions/checkout@v5
+
+      - run: npm install -g "pnpm@$PNPM_VERSION"
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: pnpm test
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bindings-linux-${{ matrix.arch }}-musl
+          path: dist/*.node
+          if-no-files-found: error
+
+  # Publishing happens through npm trusted publishing (OIDC), so no npm token
+  # is configured. The napi prepublish hook publishes the four platform
+  # packages, uploads the binaries to a GitHub release (which is why the job
+  # needs the contents write permission) and updates the optionalDependencies
+  # versions, after which npm publish releases the root package.
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [build-gnu, build-musl]
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify tag matches package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$version" ]; then
+            echo "Tag v$tag does not match package.json version $version" >&2
+            exit 1
+          fi
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build:ts
+
+      - run: pnpm lint
+
+      - name: Create the platform package directories
+        run: pnpm napi create-npm-dirs
+
+      # Each build job uploaded its artifact under bindings-<platform>, so
+      # this produces artifacts/bindings-<platform>/<binary>.node, which is
+      # the layout napi artifacts expects.
+      - name: Download the native binaries
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Move the binaries into the platform packages
+        run: pnpm artifacts
+
+      - name: Publish
+        run: npm publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

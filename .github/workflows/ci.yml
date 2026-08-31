@@ -1,0 +1,207 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PNPM_VERSION: 10.33.0
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build:ts
+
+      - run: pnpm lint
+
+      - run: cargo fmt --check
+
+  # Landlock behavior depends only on the kernel, not on libc or (in
+  # practice) the CPU architecture, so this job runs the full suite once per
+  # ABI tier by booting pinned mainline kernels with virtme-ng. The guests
+  # share the host root filesystem through virtiofs, which means the addon
+  # built on the runner and the installed node_modules are reused as they are
+  # inside every guest.
+  test-kernel:
+    name: Test on Linux ${{ matrix.kernel }} (Landlock ABI v${{ matrix.abi }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each entry pins the oldest practical kernel of one Landlock ABI
+        # tier. The v5.15 entry stands in for the documented 5.13 floor
+        # because the earliest mainline builds predate distributions enabling
+        # CONFIG_SECURITY_LANDLOCK. The abi value feeds LANDLOCK_TEST_MIN_ABI,
+        # which tests/abi.test.ts asserts so that a kernel without working
+        # Landlock fails the job instead of silently skipping every test.
+        include:
+          - kernel: v5.15
+            abi: 1
+          - kernel: v6.1
+            abi: 2
+          - kernel: v6.2
+            abi: 3
+          - kernel: v6.7
+            abi: 4
+          - kernel: v6.10
+            abi: 5
+          - kernel: v6.12
+            abi: 6
+          - kernel: v6.15
+            abi: 7
+    steps:
+      - uses: actions/checkout@v5
+
+      # Standard GitHub-hosted x86_64 runners expose /dev/kvm, but it only
+      # becomes accessible after this udev rule from the GitHub documentation.
+      # Without KVM the guests would fall back to slow TCG emulation.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install virtme-ng
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends virtme-ng qemu-system-x86 virtiofsd busybox-static
+
+      - name: Cache the ${{ matrix.kernel }} kernel image
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/virtme-ng
+          key: virtme-ng-kernel-${{ matrix.kernel }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      # The generated script bakes the runner PATH into the guest session.
+      # It runs as root because the fs fixtures create device nodes with
+      # mknod, and the lsm= parameter enables Landlock on kernels that do not
+      # include it in their default LSM list. The script(1) wrapper allocates
+      # the pseudo-terminal that vng requires, because workflow steps run
+      # without one, and it propagates the guest exit code.
+      - name: Run tests under Linux ${{ matrix.kernel }}
+        run: |
+          cat > "$RUNNER_TEMP/vng-test.sh" <<EOF
+          #!/bin/bash
+          set -eu
+          export PATH="$PATH"
+          export LANDLOCK_TEST_MIN_ABI=${{ matrix.abi }}
+          cd "$PWD"
+          uname -r
+          exec pnpm test
+          EOF
+          chmod +x "$RUNNER_TEMP/vng-test.sh"
+          script -qec "vng --run ${{ matrix.kernel }} --verbose --user root --rw --cpus 4 --memory 4G --append 'lsm=landlock,lockdown,yama,integrity,apparmor' -- '$RUNNER_TEMP/vng-test.sh'" /dev/null
+
+  # The kernel matrix above already exercises the x64 gnu build, and the
+  # remaining jobs prove the other napi targets build, load and pass on the
+  # stock runner kernel. Ubuntu 24.04 runners ship at least Linux 6.8, which
+  # provides Landlock ABI v4.
+  test-musl:
+    name: Test on ${{ matrix.arch }} musl (Alpine)
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    container:
+      image: node:24-alpine
+      # This job verifies the musl binary rather than container confinement,
+      # so the default Docker seccomp profile is disabled to keep the
+      # landlock syscalls reachable.
+      options: --security-opt seccomp=unconfined
+    env:
+      LANDLOCK_TEST_MIN_ABI: 4
+    steps:
+      - name: Install build dependencies
+        run: apk add --no-cache git build-base rust cargo
+
+      # actions/checkout is a JavaScript action, and those do not run in
+      # Alpine containers on arm64 runners, so the checkout happens with
+      # plain git commands instead.
+      - name: Check out the repository
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git fetch --depth=1 "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$GITHUB_SHA"
+          git checkout --force FETCH_HEAD
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - run: npm install -g "pnpm@$PNPM_VERSION"
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: pnpm test
+
+  test-arm64-gnu:
+    name: Test on arm64 gnu
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      # sudo is required because the fs fixtures create device nodes with mknod
+      - run: sudo env "PATH=$PATH" LANDLOCK_TEST_MIN_ABI=4 pnpm test

@@ -1,0 +1,79 @@
+{
+  "name": "landlock-js",
+  "version": "0.0.0",
+  "description": "Node.js bindings for Linux Landlock security features",
+  "author": "Dominic Elm",
+  "license": "MIT",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist/index.d.mts",
+    "dist/index.mjs",
+    "dist/index.mjs.map"
+  ],
+  "napi": {
+    "binaryName": "landlock-js",
+    "packageName": "@landlock/landlock-js",
+    "npmClient": "pnpm",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-gnu",
+      "aarch64-unknown-linux-musl"
+    ]
+  },
+  "scripts": {
+    "dev": "pnpm run build:ts --watch",
+    "build": "pnpm run build:ts && pnpm run build:native",
+    "build:ts": "tsdown",
+    "build:native": "napi build --output-dir dist --esm --platform --release",
+    "artifacts": "napi artifacts",
+    "lint": "oxlint src examples tests && eslint --cache src examples tests",
+    "lint:fix": "oxlint src --fix && eslint --cache src --fix",
+    "prepublishOnly": "napi prepublish -t npm",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "landlock",
+    "security",
+    "sandbox",
+    "linux",
+    "native",
+    "addon"
+  ],
+  "optionalDependencies": {
+    "@landlock/landlock-js-linux-arm64-gnu": "0.0.0",
+    "@landlock/landlock-js-linux-arm64-musl": "0.0.0",
+    "@landlock/landlock-js-linux-x64-gnu": "0.0.0",
+    "@landlock/landlock-js-linux-x64-musl": "0.0.0"
+  },
+  "pnpm": {
+    "ignoredOptionalDependencies": [
+      "@landlock/landlock-js-linux-arm64-gnu",
+      "@landlock/landlock-js-linux-arm64-musl",
+      "@landlock/landlock-js-linux-x64-gnu",
+      "@landlock/landlock-js-linux-x64-musl"
+    ]
+  },
+  "devDependencies": {
+    "@d3lm/lint-preset": "^1.2.0",
+    "@napi-rs/cli": "^3.8.6",
+    "@types/node": "^26.4.0",
+    "detect-libc": "^2.1.2",
+    "eslint": "^10.9.1",
+    "oxlint": "^1.80.0",
+    "oxlint-tsgolint": "^7.0.2001",
+    "prettier": "^3.9.6",
+    "tsdown": "^0.22.14",
+    "tsx": "^4.23.13",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

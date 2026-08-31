@@ -1,0 +1,8 @@
+{
+  "rust-analyzer.procMacro.ignored": {
+    "napi-derive": ["napi"]
+  },
+  "rust-analyzer.diagnostics.disabled": ["proc-macro-disabled"],
+  "oxc.enable.oxlint": true,
+  "workspaceKeybindings.autoFixAll.enabled": true
+}

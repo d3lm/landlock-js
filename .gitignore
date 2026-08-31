@@ -1,0 +1,16 @@
+node_modules/
+dist/
+target/
+npm/
+artifacts/
+*.node
+.DS_Store
+*.log
+.env
+.idea/
+*.swp
+*.swo
+Cargo.lock
+package-lock.json
+.eslintcache
+.pnpm-store
