@@ -55,6 +55,11 @@ jobs:
           path: dist/*.node
           if-no-files-found: error
 
+  # JavaScript actions cannot run inside Alpine containers on arm64 runners,
+  # which rules out a job-level container here because both checkout and
+  # upload-artifact are JavaScript actions. Checkout and the artifact upload
+  # therefore run on the host, and the Alpine build and test run through
+  # docker run with the workspace mounted.
   build-musl:
     name: Build linux-${{ matrix.arch }}-musl
     runs-on: ${{ matrix.runner }}
@@ -66,26 +71,27 @@ jobs:
             arch: x64
           - runner: ubuntu-24.04-arm
             arch: arm64
-    container:
-      image: node:24-alpine
-      # The default Docker seccomp profile blocks the landlock syscalls,
-      # so it is disabled to let the tests exercise the freshly built binary.
-      options: --security-opt seccomp=unconfined
-    env:
-      LANDLOCK_TEST_MIN_ABI: 4
     steps:
-      - name: Install build dependencies
-        run: apk add --no-cache git build-base rust cargo
-
       - uses: actions/checkout@v5
 
-      - run: npm install -g "pnpm@$PNPM_VERSION"
-
-      - run: pnpm install --frozen-lockfile
-
-      - run: pnpm build
-
-      - run: pnpm test
+      # The default Docker seccomp profile blocks the landlock syscalls,
+      # so it is disabled to let the tests exercise the freshly built binary.
+      - name: Build and test inside Alpine
+        run: |
+          docker run --rm \
+            --security-opt seccomp=unconfined \
+            --volume "$PWD:/workspace" \
+            --workdir /workspace \
+            --env LANDLOCK_TEST_MIN_ABI=4 \
+            --env PNPM_VERSION \
+            node:24-alpine \
+            sh -ec '
+              apk add --no-cache git build-base rust cargo
+              npm install -g "pnpm@$PNPM_VERSION"
+              pnpm install --frozen-lockfile
+              pnpm build
+              pnpm test
+            '
 
       - uses: actions/upload-artifact@v7
         with:
