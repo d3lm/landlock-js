@@ -101,6 +101,32 @@ jobs:
           path: ~/.cache/virtme-ng
           key: virtme-ng-kernel-${{ matrix.kernel }}
 
+      # The Ubuntu mainline packages for Linux v7.0 and later follow the
+      # merged-usr layout and install kernel modules under usr/lib/modules
+      # instead of lib/modules. The packaged virtme-ng (1.35) only searches
+      # for lib/modules next to the extracted kernel image, so for these
+      # kernels it finds no modules, skips building the initramfs that loads
+      # virtio_fs, and the guest panics because it cannot mount its virtiofs
+      # root. This step downloads the kernel into the virtme-ng cache before
+      # the test run and adds a lib symlink so the module lookup works again.
+      # It also extracts the packages itself when a cached download stopped
+      # before extraction, because the downloader skips any package file that
+      # already exists in the cache. The trailing ls asserts that modules are
+      # in place for every matrix entry.
+      - name: Prepare the ${{ matrix.kernel }} kernel cache
+        run: |
+          python3 -c "from virtme_ng.mainline import KernelDownloader; KernelDownloader('${{ matrix.kernel }}', verbose=True)"
+          kernel_dir="$HOME/.cache/virtme-ng/${{ matrix.kernel }}/amd64"
+          if [ ! -d "$kernel_dir/lib/modules" ] && [ ! -d "$kernel_dir/usr/lib/modules" ]; then
+            for deb in "$kernel_dir"/*.deb; do
+              dpkg -x "$deb" "$kernel_dir"
+            done
+          fi
+          if [ -d "$kernel_dir/usr/lib/modules" ] && [ ! -e "$kernel_dir/lib" ]; then
+            ln -s usr/lib "$kernel_dir/lib"
+          fi
+          ls "$kernel_dir/lib/modules"
+
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
