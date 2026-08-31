@@ -278,11 +278,14 @@ export function isLandlockSupported(): boolean {
 /**
  * Applies restrict-self flags to the current process without enforcing a
  * ruleset, which maps to `landlock_restrict_self(2)` with a ruleset file
- * descriptor of -1. The kernel accepts `log_subdomains: false` on this path,
- * optionally combined with `all_threads: true` to propagate the logging
- * configuration to every thread of the process. This is useful for runtimes
- * that launch programs which create their own Landlock domains and would
- * otherwise flood the audit log.
+ * descriptor of -1. The kernel accepts `log_subdomains: false` on this path
+ * since ABI 7. Since ABI 9 (Linux 7.1) it can be combined with
+ * `all_threads: true` to propagate the logging configuration to every thread
+ * of the process. ABI 8 kernels support `all_threads` only with a ruleset,
+ * so on them the ruleset-less combination throws with `EBADF` under every
+ * compatibility level. This function is useful for runtimes that launch
+ * programs which create their own Landlock domains and would otherwise flood
+ * the audit log.
  *
  * When no effective flag remains, for example because the kernel predates
  * ABI 7 and the default `'best_effort'` level dropped them, the syscall is

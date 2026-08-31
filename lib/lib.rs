@@ -444,9 +444,10 @@ impl LandlockRuleset {
 }
 
 /// Calls landlock_restrict_self(2) with a ruleset file descriptor of -1, which
-/// applies restrict-self flags without creating a new Landlock domain. The
-/// kernel only accepts muting subdomain logs on this path, optionally combined
-/// with the all-threads flag.
+/// applies restrict-self flags without creating a new Landlock domain. The kernel
+/// only accepts muting subdomain logs on this path. Since Landlock ABI 9 (Linux 7.1)
+/// the all-threads flag can be combined with it, while ABI 8 kernels reject that
+/// combination with EBADF even though they support the flag together with a ruleset.
 #[napi]
 pub fn apply_restrict_self_flags(options: Option<RestrictSelfFlagsOptions>) -> Result<RestrictSelfFlagsStatus> {
   #[cfg(target_os = "linux")]

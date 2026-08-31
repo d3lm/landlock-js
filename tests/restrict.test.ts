@@ -38,6 +38,10 @@
  * - The `apply_flags_*` cases mirror the ruleset-less
  *   landlock_restrict_self(2) calls with a -1 file descriptor that upstream
  *   exercises for subdomain log muting, including the TSYNC combination.
+ *   The kernel accepts that combination only since Linux 7.1 (ABI 9), so
+ *   `apply_flags_all_threads` needs ABI 9, and
+ *   `apply_flags_all_threads_unsupported` proves the EBADF rejection on
+ *   ABI 8 kernels, which already support TSYNC itself.
  * - The in-process "errata" suite below mirrors the errata queries in
  *   base_test.c (`errata` and `errata_abi`). The exact bitmask depends on
  *   the running kernel, so the assertions are structural.
@@ -96,7 +100,8 @@ test('no_new_privs_opt_out');
 test('apply_flags_defaults');
 test('apply_flags_unsupported', { maxAbi: 6 });
 test('apply_flags_subdomains', { minAbi: 7 });
-test('apply_flags_all_threads', { minAbi: 8 });
+test('apply_flags_all_threads_unsupported', { minAbi: 8, maxAbi: 8 });
+test('apply_flags_all_threads', { minAbi: 9 });
 
 vitest.describe('errata', () => {
   vitest.test('returns a non-negative bitmask', () => {

@@ -305,9 +305,40 @@ const testCases: Partial<Record<string, () => Promise<void> | void>> = {
   },
 
   /**
-   * On an ABI 8 kernel, the muted subdomain logging can be propagated to all
+   * On an ABI 8 kernel, all_threads is supported with a ruleset, but the
+   * ruleset-less path still requires the flags to be exactly the muted
+   * subdomain logging, so combining it with all_threads makes the kernel
+   * treat -1 as a real ruleset file descriptor and fail with EBADF. No
+   * compatibility level can drop the flag, because the flag itself passes
+   * the ABI 8 compatibility check. Linux 7.1 (ABI 9) relaxed the kernel
+   * check to accept the combination.
+   */
+  apply_flags_all_threads_unsupported() {
+    expect(() =>
+      applyRestrictSelfFlags({ log_subdomains: false, all_threads: true, compatibility: 'hard_requirement' }),
+    ).toThrow(/Bad file descriptor/);
+
+    // best effort cannot drop the flag either, because ABI 8 supports it
+    expect(() => applyRestrictSelfFlags({ log_subdomains: false, all_threads: true })).toThrow(/Bad file descriptor/);
+
+    // the failed calls changed nothing, and muting the logs alone still works
+    const status = applyRestrictSelfFlags({ log_subdomains: false, compatibility: 'hard_requirement' });
+
+    expect(status).toEqual({
+      no_new_privs: true,
+      log_subdomains: false,
+      all_threads: false,
+    });
+
+    fs.readdirSync(os.tmpdir());
+  },
+
+  /**
+   * On an ABI 9 kernel, the muted subdomain logging can be propagated to all
    * threads of the process. The kernel only accepts all_threads on this
-   * ruleset-less path together with muting subdomain logs.
+   * ruleset-less path together with muting subdomain logs, and only since
+   * Linux 7.1 (ABI 9). ABI 8 kernels reject the combination, which the
+   * apply_flags_all_threads_unsupported case proves.
    */
   apply_flags_all_threads() {
     const status = applyRestrictSelfFlags({

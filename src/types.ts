@@ -170,9 +170,10 @@ export interface RestrictSelfFlagsOptions {
 
   /**
    * Applies the logging configuration to all threads of the process. Disabled
-   * by default. Enabling it requires Landlock ABI 8, and the kernel only
-   * accepts it on this ruleset-less path together with
-   * `log_subdomains: false`.
+   * by default. The kernel only accepts it on this ruleset-less path together
+   * with `log_subdomains: false`, and only since Landlock ABI 9 (Linux 7.1).
+   * On an ABI 8 kernel the flag itself passes the compatibility check, so no
+   * level drops it, and the call throws with `EBADF` instead.
    */
   all_threads?: boolean;
 
