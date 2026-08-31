@@ -35,7 +35,8 @@
     "lint": "oxlint src examples tests && eslint --cache src examples tests",
     "lint:fix": "oxlint src --fix && eslint --cache src --fix",
     "prepublishOnly": "napi prepublish -t npm",
-    "test": "vitest run"
+    "test": "vitest run",
+    "version": "node scripts/sync-versions.mjs && git add Cargo.toml package.json"
   },
   "keywords": [
     "landlock",
