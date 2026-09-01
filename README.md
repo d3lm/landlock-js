@@ -32,7 +32,7 @@ Prebuilt binaries are published for x64 and arm64, each in glibc and musl (Alpin
 | 5            | 6.10   | `ioctl_dev`.                                                                      |
 | 6            | 6.12   | Scopes (`signal`, `abstract_unix_socket`).                                        |
 | 7            | 6.15   | Audit log control (`log_same_exec`, `log_new_exec`, `log_subdomains`) and errata. |
-| 8            | 7.0    | Enforcement across all threads (`all_threads`).                                   |
+| 8            | 7.0    | Enforcement on threads that already exist (`all_threads`).                        |
 | 9            | 7.1    | `resolve_unix` (pathname UNIX socket rules).                                      |
 
 The newest ABI features (UDP rules and quiet log suppression in ABI 10, the atomic `no_new_privs` flag in ABI 11) are not exposed yet, because the [landlock crate](https://crates.io/crates/landlock) this library builds on does not support them so far.
@@ -115,16 +115,16 @@ After restriction, denied operations surface as ordinary `EACCES` or `EPERM` err
 
 ### Functions
 
-| Function                          | Description                                                                                                |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `isLandlockSupported()`           | Returns `true` when the kernel can create and enforce a basic ruleset.                                     |
-| `getAbiVersion()`                 | Returns the Landlock ABI version of the running kernel, or `0` when Landlock is unavailable.               |
-| `getErrata()`                     | Returns the bitmask of fixed Landlock errata, or `0` when the kernel predates the query (ABI 7).           |
-| `applyRestrictSelfFlags(options)` | Applies restrict-self flags without enforcing a ruleset (see [Audit Logging](#audit-logging-and-threads)). |
-| `fsAccessFromAbi(abi)`            | Returns every filesystem access right available at the given ABI version.                                  |
-| `netAccessFromAbi(abi)`           | Returns every network access right available at the given ABI version.                                     |
-| `scopesFromAbi(abi)`              | Returns every scope available at the given ABI version.                                                    |
-| `restrictFlagsFromAbi(abi)`       | Returns every restrict-self flag available at the given ABI version.                                       |
+| Function                          | Description                                                                                      |
+| --------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `isLandlockSupported()`           | Returns `true` when the kernel can create and enforce a basic ruleset.                           |
+| `getAbiVersion()`                 | Returns the Landlock ABI version of the running kernel, or `0` when Landlock is unavailable.     |
+| `getErrata()`                     | Returns the bitmask of fixed Landlock errata, or `0` when the kernel predates the query (ABI 7). |
+| `applyRestrictSelfFlags(options)` | Applies restrict-self flags without enforcing a ruleset (see [Audit Logging](#audit-logging)).   |
+| `fsAccessFromAbi(abi)`            | Returns every filesystem access right available at the given ABI version.                        |
+| `netAccessFromAbi(abi)`           | Returns every network access right available at the given ABI version.                           |
+| `scopesFromAbi(abi)`              | Returns every scope available at the given ABI version.                                          |
+| `restrictFlagsFromAbi(abi)`       | Returns every restrict-self flag available at the given ABI version.                             |
 
 Combine the `*FromAbi` helpers with `getAbiVersion()` to handle everything the running kernel supports.
 
@@ -146,8 +146,8 @@ These methods require the ruleset to have been created with `create()`:
 - `addNetPortRule(port, access)` grants the given rights on the given TCP port.
 - `addNetPortRules(rules)` adds multiple port rules at once.
 - `restrictSelf(options?)` enforces the ruleset and returns a `RestrictionStatus`. This is irreversible and can be called once per instance. By default only the calling thread is restricted, denied accesses are logged for code running the same executable, and `PR_SET_NO_NEW_PRIVS` is set. The options change this, subject to kernel support and the compatibility level:
-  - `all_threads` (ABI 8) enforces the ruleset on every thread of the process at once.
-  - `log_same_exec`, `log_new_exec`, and `log_subdomains` (ABI 7) control which denials the kernel emits as audit events (see [Audit Logging](#audit-logging-and-threads)).
+  - `all_threads` (ABI 8) enforces the ruleset on every thread of the process at once, including threads that already exist (see [Threads](#threads)).
+  - `log_same_exec`, `log_new_exec`, and `log_subdomains` (ABI 7) control which denials the kernel emits as audit events (see [Audit Logging](#audit-logging)).
   - `no_new_privs: false` skips setting `PR_SET_NO_NEW_PRIVS`, which then requires the process to hold `CAP_SYS_ADMIN` in its namespace.
 
 ### Compatibility Levels
@@ -162,13 +162,19 @@ These methods require the ruleset to have been created with `create()`:
 
 `restrictSelf()` returns an object describing what was actually enforced. `ruleset` is one of `'fully_enforced'`, `'partially_enforced'`, or `'not_enforced'`. Treat anything other than `'fully_enforced'` as a red flag in security critical code. `no_new_privs` reports whether `PR_SET_NO_NEW_PRIVS` was set, which `restrictSelf()` does as part of enforcement. A side effect worth knowing is that setuid binaries (like `sudo` or `ping`) spawned afterwards will not gain privileges. The remaining fields (`log_same_exec`, `log_new_exec`, `log_subdomains`, `all_threads`) report the effective state of each restrict-self flag, so on old kernels you can detect that a requested flag was dropped by `'best_effort'`.
 
-### Audit Logging and Threads
+### Audit Logging
 
 On ABI 7+ kernels, denied accesses are logged as audit events. By default the kernel logs denials for code running the same executable, stops logging after `execve(2)`, and does not log denials from nested domains. Three flags on `restrictSelf()` tune this: `log_same_exec: false` quiets same-executable denials, `log_new_exec: true` keeps logging across `execve(2)`, and `log_subdomains: true` also logs denials from Landlock domains created by child processes.
 
 A runtime that launches sandboxed programs, but creates no domain itself, can suppress subdomain logging without enforcing anything by calling `applyRestrictSelfFlags({ log_subdomains: false })`. This maps to `landlock_restrict_self(2)` with a ruleset file descriptor of `-1`, which the kernel accepts for exactly this flag. Since ABI 9 (Linux 7.1) it can be combined with `all_threads: true`, while ABI 8 kernels reject that pairing with `EBADF` because they support `all_threads` only together with a ruleset. Both functions take a `compatibility` level with the same semantics as the ruleset levels above. With the default `'best_effort'`, unsupported flags are dropped silently and the returned status shows what actually applied, but the `EBADF` rejection on ABI 8 is not a compatibility drop and throws under every level.
 
-On ABI 8+ kernels, `restrictSelf({ all_threads: true })` enforces the ruleset on every thread of the process instead of only the calling thread. This closes the gap where already-running worker threads would otherwise escape the sandbox.
+### Threads
+
+A Landlock domain is attached to the credentials of a thread, not to the process. `restrictSelf()` therefore restricts the thread that calls it. Every thread and child process created afterwards starts out with a copy of those credentials and inherits the domain, so spawning a new thread after the call is not a way out of the sandbox on any kernel version.
+
+Threads that already exist when `restrictSelf()` is called are a different matter. They keep their old, unrestricted credentials, and nothing the calling thread does afterwards can reach them. On kernels below ABI 8 this leaves a hole that can only be avoided by ordering, which means calling `restrictSelf()` before any other thread exists. In a Node.js process the threads that matter are worker threads and the libuv thread pool, both covered in [Node.js Specific Caveats](#nodejs-specific-caveats).
+
+On ABI 8+ kernels, `restrictSelf({ all_threads: true })` enforces the ruleset on every thread of the process atomically, including the ones that already exist, which removes the ordering constraint. On older kernels `'best_effort'` drops the flag silently and confines only the calling thread, so check `all_threads` in the returned status or use `'hard_requirement'` when you depend on it.
 
 ### Filesystem Access Rights
 
@@ -212,7 +218,7 @@ A rule for port `0` allows binding to an ephemeral port. `server.listen(0)` and 
 
 These follow from how Landlock and the Node.js runtime interact:
 
-- **Restrict as early as possible.** `restrictSelf()` restricts the calling thread. Threads created afterwards inherit the domain, but threads that already exist do not. Worker threads created before the call can bypass the sandbox entirely (the test suite proves this), and the libuv thread pool, which services async `fs`, `dns.lookup`, and some `crypto` calls, spawns lazily on first use. Call `restrictSelf()` before starting workers and before any async I/O, or their operations will not be confined. On ABI 8+ kernels, `restrictSelf({ all_threads: true })` closes this gap by restricting every existing thread atomically.
+- **Restrict as early as possible.** Without `all_threads`, `restrictSelf()` confines only the calling thread and whatever is created after it (see [Threads](#threads)). Worker threads started before the call bypass the sandbox entirely (the test suite proves this). The same goes for the libuv thread pool, which services async `fs`, `dns.lookup`, and some `crypto` and `zlib` calls. The pool spawns lazily on the first such call and its threads then live for the rest of the process. If any async I/O ran before `restrictSelf()`, every later async `fs` call from JavaScript is serviced by unrestricted threads, so `fs.readdirSync('/etc')` fails with `EACCES` while `fs.promises.readdir('/etc')` succeeds. Call `restrictSelf()` before starting workers and before any async I/O. On ABI 8+ kernels, `restrictSelf({ all_threads: true })` closes this gap by restricting every existing thread atomically.
 - **Module loading needs read access.** `require()` and dynamic `import()` after restriction are ordinary file reads. If you handle `read_file` and `read_dir`, grant them on your application code and `node_modules`, or lazy loading will fail with `EACCES`.
 - **Child processes are confined too.** Anything spawned after restriction inherits the domain and cannot escape it. This is usually what you want, but remember it when shelling out to system tools.
 - **DNS keeps working.** Landlock mediates only TCP `bind(2)` and `connect(2)`. Typical DNS runs over UDP and is unaffected even when every TCP connect is denied. Do not mistake a successful lookup for network access.
