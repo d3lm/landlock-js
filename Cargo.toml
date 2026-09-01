@@ -10,11 +10,11 @@ path = "lib/lib.rs"
 
 [dependencies]
 napi = "3.5.2"
-libc = "0.2.177"
 napi-derive = { version = "3.3.3", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.7"
+libc = "0.2.177"
 
 [build-dependencies]
 napi-build = "2.3.1"

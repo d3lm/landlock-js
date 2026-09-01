@@ -40,6 +40,21 @@ jobs:
 
       - run: cargo fmt --check
 
+  # Only Linux binaries are published, but the crate has to keep compiling on
+  # the machines developers build on. This job proves that the target gate on
+  # the linux module is enough for that, without any platform fallbacks in
+  # the crate root.
+  check-macos:
+    name: Check on macOS
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo check --all-targets
+
   # Landlock behavior depends only on the kernel, not on libc or (in
   # practice) the CPU architecture, so this job runs the full suite once per
   # ABI tier by booting pinned mainline kernels with virtme-ng. The guests
